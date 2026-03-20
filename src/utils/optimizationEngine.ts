@@ -681,3 +681,189 @@ export function calculateBPAClawback(income: number): { bpa: number; clawback: n
     clawback: Math.round(BPA.FEDERAL - bpa),
   };
 }
+
+export interface EstateTaxResult {
+  primaryResidenceTax: number;
+  secondaryPropertyTax: number;
+  rrifTax: number;
+  totalEstateTax: number;
+  strategies: string[];
+}
+
+export function calculateEstateTax(
+  primaryResidenceValue: number,
+  secondaryPropertyValue: number,
+  rrifBalance: number,
+  province: Province
+): EstateTaxResult {
+  const { CAPITAL_GAINS } = TAX_CONSTANTS_2026;
+  
+  const primaryResidenceTax = 0;
+  
+  const secondaryPropertyGain = secondaryPropertyValue * 0.5;
+  let secondaryPropertyTax = 0;
+  if (secondaryPropertyGain > 0) {
+    let taxableGain = secondaryPropertyGain;
+    if (secondaryPropertyGain > CAPITAL_GAINS.THRESHOLD) {
+      const highRateGain = secondaryPropertyGain - CAPITAL_GAINS.THRESHOLD;
+      const lowRateGain = CAPITAL_GAINS.THRESHOLD;
+      taxableGain = lowRateGain * CAPITAL_GAINS.INCLUSION_RATE_1 + highRateGain * CAPITAL_GAINS.INCLUSION_RATE_2;
+    } else {
+      taxableGain = secondaryPropertyGain * CAPITAL_GAINS.INCLUSION_RATE_1;
+    }
+    const marginalRate = calculateMarginalTaxRate(rrifBalance + taxableGain + 50000, province);
+    secondaryPropertyTax = taxableGain * marginalRate;
+  }
+  
+  const marginalRate = calculateMarginalTaxRate(rrifBalance, province);
+  const rrifTax = rrifBalance * marginalRate;
+  
+  const totalEstateTax = primaryResidenceTax + secondaryPropertyTax + rrifTax;
+  
+  const strategies: string[] = [];
+  if (rrifBalance > 100000) {
+    strategies.push("Consider life insurance to cover RRIF tax liability");
+  }
+  if (secondaryPropertyValue > 0) {
+    strategies.push("Consider gifting property to children before death (subject to rules)");
+  }
+  if (totalEstateTax > 500000) {
+    strategies.push("Explore Intergenerational Business Transfer rules");
+  }
+  strategies.push("Utilize TFSAs for tax-free legacy");
+  
+  return {
+    primaryResidenceTax,
+    secondaryPropertyTax: Math.round(secondaryPropertyTax),
+    rrifTax: Math.round(rrifTax),
+    totalEstateTax: Math.round(totalEstateTax),
+    strategies,
+  };
+}
+
+export interface CorpCompensationResult {
+  salaryBenefit: number;
+  dividendBenefit: number;
+  rrspRoomGenerated: number;
+  cppBenefit: number;
+  recommendation: string;
+  salaryAmount: number;
+  dividendAmount: number;
+}
+
+export function calculateCorpCompensation(
+  corpIncome: number,
+  desiredTakeHome: number,
+  province: Province,
+  isSmallBusiness: boolean = true
+): CorpCompensationResult {
+  const { CPP, DIVIDENDS } = TAX_CONSTANTS_2026;
+  
+  const maxSalary = Math.min(corpIncome, CPP.YMPE);
+  const rrspRoomGenerated = maxSalary * 0.18;
+  
+  const salaryTax = calculateMarginalTaxRate(maxSalary, province) * maxSalary;
+  const cppEmployee = Math.min(maxSalary - CPP.EXEMPT, CPP.YMPE) * CPP.RATE;
+  const cppEmployer = Math.min(maxSalary - CPP.EXEMPT, CPP.YMPE) * CPP.RATE;
+  const eiEmployee = Math.min(maxSalary, 68900) * 0.0163;
+  
+  const salaryNet = maxSalary - salaryTax - cppEmployee - eiEmployee;
+  const cppBenefit = cppEmployee + cppEmployer;
+  
+  const grossupRate = isSmallBusiness ? DIVIDENDS.NON_ELIGIBLE_GROSSUP : DIVIDENDS.ELIGIBLE_GROSSUP;
+  const creditRate = DIVIDENDS.FEDERAL_CREDIT_RATE + (province === "ON" ? DIVIDENDS.ON_PROVINCIAL_RATE : DIVIDENDS.BC_PROVINCIAL_RATE);
+  
+  const dividendGrossed = desiredTakeHome * grossupRate;
+  const dividendTax = dividendGrossed * (calculateMarginalTaxRate(dividendGrossed, province) - creditRate);
+  const dividendNet = dividendGrossed - Math.max(0, dividendTax);
+  
+  const salaryBenefit = rrspRoomGenerated * 0.30;
+  const dividendBenefit = 0;
+  
+  let recommendation = "";
+  if (rrspRoomGenerated * 0.30 > dividendBenefit + cppBenefit * 0.5) {
+    recommendation = `Salary is more efficient: $${Math.round(rrspRoomGenerated).toLocaleString()} RRSP room + $${Math.round(cppBenefit).toLocaleString()} CPP value`;
+  } else {
+    recommendation = "Dividends may be preferred for cash flow if RRSP room is not needed";
+  }
+  
+  return {
+    salaryBenefit: Math.round(salaryBenefit),
+    dividendBenefit: Math.round(dividendBenefit),
+    rrspRoomGenerated: Math.round(rrspRoomGenerated),
+    cppBenefit: Math.round(cppBenefit),
+    recommendation,
+    salaryAmount: Math.round(maxSalary),
+    dividendAmount: Math.round(dividendGrossed),
+  };
+}
+
+export interface YearlyProjection {
+  year: number;
+  standardWealth: number;
+  optimizedWealth: number;
+}
+
+export interface CompassGapResult {
+  projections: YearlyProjection[];
+  finalGap: number;
+  standardTotal: number;
+  optimizedTotal: number;
+}
+
+export function calculateCompassGap(
+  currentAge: number,
+  currentSavings: number,
+  annualContribution: number,
+  marginalTaxRate: number,
+  hasCCB: boolean,
+  ccbValue: number,
+  hasMortgage: boolean,
+  mortgageRate: number,
+  mortgageBalance: number,
+  years: number = 25
+): CompassGapResult {
+  const standardReturn = 0.05;
+  const optimizedReturn = 0.06;
+  
+  let standardWealth = currentSavings;
+  let optimizedWealth = currentSavings;
+  
+  const projections: YearlyProjection[] = [];
+  
+  for (let year = 0; year <= years; year++) {
+    projections.push({
+      year: currentAge + year,
+      standardWealth: Math.round(standardWealth),
+      optimizedWealth: Math.round(optimizedWealth),
+    });
+    
+    const standardContribution = annualContribution * (1 - marginalTaxRate);
+    const optimizedContribution = annualContribution;
+    
+    standardWealth = standardWealth * (1 + standardReturn) + standardContribution;
+    
+    let optimizedGrowth = optimizedWealth * (1 + optimizedReturn);
+    let optimizedContributionAdjusted = optimizedContribution;
+    
+    if (hasCCB && year < 18) {
+      optimizedGrowth += ccbValue * 0.5;
+    }
+    
+    if (hasMortgage && mortgageBalance > 0) {
+      const interestSaved = mortgageBalance * mortgageRate * 0.3;
+      optimizedGrowth += interestSaved;
+    }
+    
+    optimizedWealth = optimizedGrowth + optimizedContributionAdjusted;
+  }
+  
+  const finalGap = optimizedWealth - standardWealth;
+  
+  return {
+    projections,
+    finalGap: Math.round(finalGap),
+    standardTotal: Math.round(standardWealth),
+    optimizedTotal: Math.round(optimizedWealth),
+  };
+}

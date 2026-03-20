@@ -54,6 +54,17 @@ export interface UserProfile {
   donations: number;
   hbpBalance: number;
   movingToProvince?: Province;
+  isSelfEmployed: boolean;
+  corpIncome: number;
+  isSmallBusiness: boolean;
+  primaryResidenceValue: number;
+  secondaryPropertyValue: number;
+  rrifBalance: number;
+  medicalExpenses: number;
+  spouseIncome: number;
+  capitalGains: number;
+  renovationExpenses: number;
+  isRenovatingForSenior: boolean;
 }
 
 export interface EconomicData {

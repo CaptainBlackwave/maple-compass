@@ -1,6 +1,7 @@
 import EconomicPulse from "@/components/EconomicPulse";
 import Profiler from "@/components/Profiler";
 import MapleStack from "@/components/MapleStack";
+import CompassGapVisualizer from "@/components/CompassGapVisualizer";
 
 export default function Home() {
   return (
@@ -22,6 +23,8 @@ export default function Home() {
             <Profiler />
             <MapleStack />
           </div>
+
+          <CompassGapVisualizer />
 
           <footer className="mt-12 pt-6 border-t border-neutral-800">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-neutral-500">
