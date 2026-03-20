@@ -384,3 +384,300 @@ export function runFullOptimization(profile: {
     survivalMode: calculateSurvivalMode(profile.grossIncome, profile.province),
   };
 }
+
+export interface MedicalClaimResult {
+  optimalClaimant: "self" | "spouse" | "both";
+  selfCredit: number;
+  spouseCredit: number;
+  action: string;
+}
+
+export function calculateMedicalExpenseClaim(
+  medicalExpenses: number,
+  selfIncome: number,
+  spouseIncome: number,
+  province: Province
+): MedicalClaimResult {
+  const { MEDICAL } = TAX_CONSTANTS_2026;
+  
+  const selfFloor = Math.min(selfIncome * MEDICAL.FLOOR_RATE, MEDICAL.MAX_FLOOR);
+  const spouseFloor = Math.min(spouseIncome * MEDICAL.FLOOR_RATE, MEDICAL.MAX_FLOOR);
+  
+  const selfClaimable = Math.max(0, medicalExpenses - selfFloor);
+  const spouseClaimable = Math.max(0, medicalExpenses - spouseFloor);
+  
+  const selfRate = calculateMarginalTaxRate(selfIncome, province);
+  const spouseRate = calculateMarginalTaxRate(spouseIncome, province);
+  
+  const selfCredit = selfClaimable * selfRate;
+  const spouseCredit = spouseClaimable * spouseRate;
+  
+  if (selfIncome === spouseIncome || medicalExpenses <= Math.min(selfFloor, spouseFloor)) {
+    return {
+      optimalClaimant: "both",
+      selfCredit,
+      spouseCredit,
+      action: "Claim on both if expenses exceed both floors",
+    };
+  }
+  
+  if (selfClaimable > 0 && spouseClaimable === 0) {
+    return {
+      optimalClaimant: "self",
+      selfCredit,
+      spouseCredit: 0,
+      action: "You have the lower floor - claim all medical expenses",
+    };
+  }
+  
+  if (spouseClaimable > 0 && selfClaimable === 0) {
+    return {
+      optimalClaimant: "spouse",
+      selfCredit: 0,
+      spouseCredit,
+      action: "Spouse has the lower floor - transfer claim to spouse",
+    };
+  }
+  
+  if (selfCredit > spouseCredit) {
+    return {
+      optimalClaimant: "self",
+      selfCredit,
+      spouseCredit: 0,
+      action: `You get $${Math.round(selfCredit).toLocaleString()} more credit - claim on your return`,
+    };
+  }
+  
+  return {
+    optimalClaimant: "spouse",
+    selfCredit: 0,
+    spouseCredit,
+    action: `Spouse gets $${Math.round(spouseCredit).toLocaleString()} more credit - claim on spouse's return`,
+  };
+}
+
+export interface CPPOASResult {
+  cppAt60: number;
+  cppAt65: number;
+  cppAt70: number;
+  oasAt65: number;
+  oasAt70: number;
+  oasAt75: number;
+  guaranteedReturnCPP: number;
+  guaranteedReturnOAS: number;
+  recommendation: string;
+}
+
+export function calculateCPPOASDeferral(
+  currentCPP: number,
+  age: number,
+  oasEligible: boolean
+): CPPOASResult {
+  const { CPP, OAS } = TAX_CONSTANTS_2026;
+  
+  const cppMonthlyIncrease = CPP.MONTHLY_INCREASE;
+  const oasMonthlyIncrease = 0.006;
+  
+  const cppAt60 = currentCPP;
+  const cppAt65 = currentCPP * (1 + cppMonthlyIncrease * 12 * 5);
+  const cppAt70 = currentCPP * (1 + cppMonthlyIncrease * 12 * 10);
+  
+  const oasBase = OAS.MAX_MONTHLY * 12;
+  const oasAt65 = oasEligible ? oasBase : 0;
+  const oasAt70 = oasBase * (1 + oasMonthlyIncrease * 12 * 5);
+  const oasAt75 = oasAt70 * (1 + OAS.AGE_UP_75);
+  
+  const cppIncrease65to70 = ((cppAt70 - cppAt65) / cppAt65) * 100;
+  const oasIncrease65to70 = ((oasAt70 - oasAt65) / oasAt65) * 100;
+  
+  let recommendation = "";
+  if (age < 60) {
+    recommendation = `Wait until 70 for ${cppIncrease65to70.toFixed(0)}% higher CPP (risk-free)`;
+  } else if (age < 65) {
+    recommendation = `Consider waiting - each year delays adds ${(cppMonthlyIncrease * 100 * 12).toFixed(1)}% to your CPP`;
+  } else if (age < 70) {
+    recommendation = `OAS deferral to 70 gives ${oasIncrease65to70.toFixed(0)}% more + 10% if 75+`;
+  } else {
+    recommendation = "You're at maximum CPP/OAS - consider legacy planning";
+  }
+  
+  return {
+    cppAt60,
+    cppAt65,
+    cppAt70,
+    oasAt65,
+    oasAt70,
+    oasAt75,
+    guaranteedReturnCPP: cppMonthlyIncrease * 100 * 12,
+    guaranteedReturnOAS: oasMonthlyIncrease * 100 * 12,
+    recommendation,
+  };
+}
+
+export interface CapitalGainsResult {
+  inclusionRate: number;
+  taxableGain: number;
+  estimatedTax: number;
+  warning: string | null;
+}
+
+export function calculateCapitalGainsTax(
+  capitalGain: number,
+  income: number,
+  province: Province
+): CapitalGainsResult {
+  const { CAPITAL_GAINS } = TAX_CONSTANTS_2026;
+  
+  let inclusionRate = Number(TAX_CONSTANTS_2026.CAPITAL_GAINS.INCLUSION_RATE_1);
+  let warning: string | null = null;
+  
+  if (capitalGain > CAPITAL_GAINS.THRESHOLD) {
+    inclusionRate = Number(TAX_CONSTANTS_2026.CAPITAL_GAINS.INCLUSION_RATE_2);
+    warning = `Warning: ${((Number(CAPITAL_GAINS.INCLUSION_RATE_2) - Number(CAPITAL_GAINS.INCLUSION_RATE_1)) * 100).toFixed(0)}% inclusion rate triggers on gains over $${(CAPITAL_GAINS.THRESHOLD / 1000).toFixed(0)}k`;
+  }
+  
+  const taxableGain = capitalGain * inclusionRate;
+  const marginalRate = calculateMarginalTaxRate(income + taxableGain, province);
+  const estimatedTax = taxableGain * marginalRate;
+  
+  if (capitalGain > CAPITAL_GAINS.THRESHOLD * 2 && income > 173205) {
+    warning = (warning || "") + " - AMT may apply";
+  }
+  
+  return {
+    inclusionRate,
+    taxableGain,
+    estimatedTax,
+    warning,
+  };
+}
+
+export interface GSTHousingRebateResult {
+  eligible: boolean;
+  rebate: number;
+  action: string;
+}
+
+export function calculateGSTHousingRebate(
+  isFirstTimeBuyer: boolean,
+  homePrice: number,
+  isNewConstruction: boolean
+): GSTHousingRebateResult {
+  const { GST_HOUSING } = TAX_CONSTANTS_2026;
+  
+  if (!isFirstTimeBuyer || !isNewConstruction) {
+    return {
+      eligible: false,
+      rebate: 0,
+      action: "GST housing rebate requires first-time buyer + new construction",
+    };
+  }
+  
+  let rebate = 0;
+  if (homePrice <= GST_HOUSING.FULL_REBATE_MAX) {
+    rebate = homePrice * GST_HOUSING.RATE;
+  } else if (homePrice <= GST_HOUSING.PARTIAL_REBATE_MAX) {
+    const maxRebate = GST_HOUSING.FULL_REBATE_MAX * GST_HOUSING.RATE;
+    const phaseOut = (homePrice - GST_HOUSING.FULL_REBATE_MAX) / (GST_HOUSING.PARTIAL_REBATE_MAX - GST_HOUSING.FULL_REBATE_MAX);
+    rebate = maxRebate * (1 - phaseOut);
+  }
+  
+  return {
+    eligible: true,
+    rebate: Math.round(rebate),
+    action: `Potential $${Math.round(rebate).toLocaleString()} GST rebate on new construction`,
+  };
+}
+
+export interface AMTResult {
+  isAMT: boolean;
+  amtTax: number;
+  regularTax: number;
+  additionalTax: number;
+  warning: string | null;
+}
+
+export function calculateAMT(
+  income: number,
+  capitalGains: number,
+  donations: number,
+  provincialCredits: number
+): AMTResult {
+  const { AMT, CAPITAL_GAINS } = TAX_CONSTANTS_2026;
+  
+  const taxableGains = capitalGains * CAPITAL_GAINS.INCLUSION_RATE_1;
+  const amtIncome = income + taxableGains + donations * 0.3;
+  
+  const isAMT = amtIncome > AMT.THRESHOLD;
+  
+  const amtTax = amtIncome > AMT.THRESHOLD ? (amtIncome - AMT.THRESHOLD) * AMT.RATE : 0;
+  const regularTax = income * calculateMarginalTaxRate(income, "ON") * 0.3;
+  
+  const additionalTax = Math.max(0, amtTax - regularTax - provincialCredits);
+  
+  let warning: string | null = null;
+  if (isAMT && additionalTax > 0) {
+    warning = `AMT applies: $${Math.round(additionalTax).toLocaleString()} extra tax due to high donations + capital gains`;
+  }
+  
+  return {
+    isAMT,
+    amtTax,
+    regularTax,
+    additionalTax,
+    warning,
+  };
+}
+
+export interface MHRTCResult {
+  eligible: boolean;
+  credit: number;
+  action: string;
+}
+
+export function calculateMHRTC(
+  renovationExpenses: number,
+  isForSenior: boolean,
+  seniorAge: number
+): MHRTCResult {
+  const { MHRTC } = TAX_CONSTANTS_2026;
+  
+  if (!isForSenior || seniorAge < MHRTC.SENIOR_AGE) {
+    return {
+      eligible: false,
+      credit: 0,
+      action: "MHRTC requires renovations for a senior (65+) to qualify",
+    };
+  }
+  
+  const eligibleExpenses = Math.min(renovationExpenses, MHRTC.MAX_EXPENSE);
+  const credit = eligibleExpenses * MHRTC.RATE;
+  
+  return {
+    eligible: true,
+    credit: Math.round(credit),
+    action: `15% credit on $${eligibleExpenses.toLocaleString()} = $${Math.round(credit).toLocaleString()} back`,
+  };
+}
+
+export function calculateBPAClawback(income: number): { bpa: number; clawback: number } {
+  const { BPA } = TAX_CONSTANTS_2026;
+  
+  if (income <= BPA.REDUCTION_START) {
+    return { bpa: BPA.FEDERAL, clawback: 0 };
+  }
+  
+  if (income >= BPA.REDUCTION_FLOOR) {
+    const minBPA = BPA.FEDERAL * (1 - BPA.MAX_REDUCTION);
+    return { bpa: minBPA, clawback: BPA.FEDERAL - minBPA };
+  }
+  
+  const progress = (income - BPA.REDUCTION_START) / (BPA.REDUCTION_FLOOR - BPA.REDUCTION_START);
+  const reduction = progress * BPA.MAX_REDUCTION;
+  const bpa = BPA.FEDERAL * (1 - reduction);
+  
+  return {
+    bpa: Math.round(bpa),
+    clawback: Math.round(BPA.FEDERAL - bpa),
+  };
+}
