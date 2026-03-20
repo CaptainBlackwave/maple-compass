@@ -24,7 +24,7 @@ const provinceNames: Record<Province, string> = {
   YT: "Yukon",
 };
 
-function calculateCarbonRebate(province: Province, income: number, children: number): number {
+function calculateCarbonRebate(province: Province, income: number, children: number, isRural: boolean): number {
   const baseAmounts: Record<string, { base: number; spouse: number; child: number }> = {
     ON: { base: 488, spouse: 244, child: 122 },
     AB: { base: 0, spouse: 0, child: 0 },
@@ -48,6 +48,10 @@ function calculateCarbonRebate(province: Province, income: number, children: num
   
   rebate += amounts.spouse;
   rebate += children * amounts.child;
+  
+  if (isRural) {
+    rebate = rebate * 1.2;
+  }
   
   return Math.round(rebate);
 }
@@ -77,6 +81,8 @@ export default function Profiler() {
       childrenCount: 0,
       employerMatch: "none" as EmployerMatchStatus,
       age: 30,
+      isRural: false,
+      rrspContributions: 0,
     }
   );
 
@@ -111,7 +117,7 @@ export default function Profiler() {
     : 0;
 
   const carbonRebate = formData.grossIncome && formData.province
-    ? calculateCarbonRebate(formData.province, formData.grossIncome, formData.childrenCount || 0)
+    ? calculateCarbonRebate(formData.province, formData.grossIncome, formData.childrenCount || 0, formData.isRural || false)
     : 0;
 
   const isQuebec = formData.province === "QC";
@@ -316,21 +322,6 @@ export default function Profiler() {
 
           <div>
             <label className="block text-sm text-neutral-300 mb-1">
-              Children (under 18)
-            </label>
-            <input
-              type="number"
-              value={formData.childrenCount || ""}
-              onChange={(e) =>
-                setFormData({ ...formData, childrenCount: parseInt(e.target.value) || 0 })
-              }
-              placeholder="0"
-              className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-2 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-red-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-neutral-300 mb-1">
               Employer Match
             </label>
             <select
@@ -344,6 +335,52 @@ export default function Profiler() {
               <option value="partial">Partial</option>
               <option value="full">Full</option>
             </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm text-neutral-300 mb-1">
+              RRSP Contributions (Annual)
+            </label>
+            <input
+              type="number"
+              value={formData.rrspContributions || ""}
+              onChange={(e) =>
+                setFormData({ ...formData, rrspContributions: parseInt(e.target.value) || 0 })
+              }
+              placeholder="0"
+              className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-2 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-neutral-300 mb-1">
+              Children (under 18)
+            </label>
+            <input
+              type="number"
+              value={formData.childrenCount || ""}
+              onChange={(e) =>
+                setFormData({ ...formData, childrenCount: parseInt(e.target.value) || 0 })
+              }
+              placeholder="0"
+              className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-2 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+          </div>
+
+          <div className="flex items-center pt-6">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.isRural || false}
+                onChange={(e) =>
+                  setFormData({ ...formData, isRural: e.target.checked })
+                }
+                className="w-4 h-4 rounded border-neutral-600 bg-neutral-900 text-red-500 focus:ring-red-500"
+              />
+              <span className="text-sm text-neutral-300">Rural Resident (+20% CAIP)</span>
+            </label>
           </div>
         </div>
 
