@@ -55,6 +55,7 @@ export default function EconomicPulse() {
               ? parseFloat(formattedInflation)
               : null,
           cadUsdRate: cadUsd,
+          carbonRebate: null,
           lastUpdated: new Date().toISOString(),
         });
 

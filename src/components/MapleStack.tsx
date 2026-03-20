@@ -4,7 +4,7 @@ import { useFinancialStore } from "@/store/financialStore";
 import { calculateMarginalTaxRate } from "@/data/taxBrackets";
 
 export default function MapleStack() {
-  const { profile, priorities, togglePriority, isProfileComplete } =
+  const { profile, priorities, togglePriority, analysis, isProfileComplete } =
     useFinancialStore();
 
   if (!isProfileComplete || !profile || priorities.length === 0) {
@@ -15,6 +15,9 @@ export default function MapleStack() {
     profile.grossIncome,
     profile.province
   );
+
+  const OAS_CLAWBACK_THRESHOLD = 81761;
+  const isNearOASClawback = profile.grossIncome > OAS_CLAWBACK_THRESHOLD - 10000;
 
   return (
     <div className="bg-neutral-800 rounded-xl p-6 border border-neutral-700">
@@ -35,8 +38,58 @@ export default function MapleStack() {
         </div>
       </div>
 
+      {isNearOASClawback && (
+        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <svg className="w-5 h-5 text-yellow-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div>
+              <p className="text-sm font-medium text-yellow-400">OAS Clawback Warning</p>
+              <p className="text-xs text-neutral-400 mt-1">
+                Your income is near the OAS clawback threshold (${OAS_CLAWBACK_THRESHOLD.toLocaleString()}). 
+                RRSP contributions can help reduce future clawback.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {analysis && (
+        <div className="mb-4 p-3 bg-neutral-900 rounded-lg space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-neutral-400">RRSP vs TFSA</span>
+            <span className={`text-sm font-medium ${
+              analysis.rrspVsTfsaRecommendation === "fhsa" ? "text-purple-400" :
+              analysis.rrspVsTfsaRecommendation === "rrsp" ? "text-blue-400" :
+              analysis.rrspVsTfsaRecommendation === "tfsa" ? "text-green-400" : "text-neutral-400"
+            }`}>
+              {analysis.rrspVsTfsaRecommendation === "fhsa" && "FHSA (Best Choice)"}
+              {analysis.rrspVsTfsaRecommendation === "rrsp" && `RRSP (+${analysis.rrspBenefit.toFixed(0)}% benefit)`}
+              {analysis.rrspVsTfsaRecommendation === "tfsa" && `TFSA (+${analysis.tfsaBenefit.toFixed(0)}% benefit)`}
+              {analysis.rrspVsTfsaRecommendation === "both" && "Both equally beneficial"}
+            </span>
+          </div>
+          {profile.mortgageBalance > 0 && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-neutral-400">Mortgage vs GIC</span>
+              <span className={`text-sm font-medium ${
+                analysis.mortgageVsInvestRecommendation === "mortgage" ? "text-orange-400" :
+                analysis.mortgageVsInvestRecommendation === "invest" ? "text-green-400" : "text-neutral-400"
+              }`}>
+                {analysis.mortgageVsInvestRecommendation === "mortgage" && 
+                  `Pay down mortgage (${analysis.mortgageSavings.toFixed(0)}/yr savings)`}
+                {analysis.mortgageVsInvestRecommendation === "invest" && 
+                  `Invest in GIC (${analysis.investmentReturn.toFixed(0)}/yr return)`}
+                {analysis.mortgageVsInvestRecommendation === "either" && "Either option works"}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="space-y-3">
-        {priorities.map((priority, index) => (
+        {priorities.map((priority) => (
           <div
             key={priority.id}
             className={`relative rounded-lg border transition-all ${
@@ -81,6 +134,8 @@ export default function MapleStack() {
                         ? "bg-orange-500 text-white"
                         : priority.level === 3
                         ? "bg-yellow-500 text-black"
+                        : priority.level === 4
+                        ? "bg-purple-500 text-white"
                         : "bg-blue-500 text-white"
                     }`}
                   >
@@ -132,13 +187,15 @@ export default function MapleStack() {
 
       <div className="mt-6 p-4 bg-neutral-900 rounded-lg">
         <p className="text-xs text-neutral-400 text-center">
-          <span className="text-red-400 font-medium">Level 1:</span> Safety Net{" "}
+          <span className="text-red-400 font-medium">L1:</span> Employer Match{" "}
           <span className="mx-1">•</span>
-          <span className="text-orange-400 font-medium">Level 2:</span> High-Interest Debt{" "}
+          <span className="text-orange-400 font-medium">L2:</span> Safety Net{" "}
           <span className="mx-1">•</span>
-          <span className="text-yellow-400 font-medium">Level 3:</span> Tax Alpha{" "}
+          <span className="text-yellow-400 font-medium">L3:</span> Debt{" "}
           <span className="mx-1">•</span>
-          <span className="text-blue-400 font-medium">Level 4:</span> Wealth Builder
+          <span className="text-purple-400 font-medium">L4:</span> Tax Alpha{" "}
+          <span className="mx-1">•</span>
+          <span className="text-blue-400 font-medium">L5:</span> Wealth
         </p>
       </div>
     </div>
