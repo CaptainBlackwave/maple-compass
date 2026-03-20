@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { calculateMarginalTaxRate, calculateTaxSavings } from "@/data/taxBrackets";
+import { TAX_CONSTANTS_2026, HIGH_INTEREST_DEBT_THRESHOLD, DEFAULT_MORTGAGE_RATE, DEFAULT_CONSERVATIVE_RETURN } from "@/data/taxConstants";
 
 export type Province =
   | "AB"
@@ -62,7 +63,7 @@ export interface WarningItem {
 
 export interface PriorityItem {
   id: string;
-  level: 1 | 2 | 3 | 4 | 5;
+  level: 1 | 2 | 3 | 4 | 5 | 6;
   title: string;
   description: string;
   action: string;
@@ -70,10 +71,17 @@ export interface PriorityItem {
   instantReturn?: number;
 }
 
+export interface PayrollMilestone {
+  month: number;
+  type: "cpp" | "cpp2" | "ei";
+  extraMonthly: number;
+}
+
 export interface AnalysisResult {
   rrspVsTfsaRecommendation: "rrsp" | "tfsa" | "both" | "fhsa";
   rrspBenefit: number;
   tfsaBenefit: number;
+  effectiveMTR: number;
   ccbBoost: number;
   mortgageVsInvestRecommendation: "mortgage" | "invest" | "either";
   mortgageSavings: number;
@@ -82,6 +90,7 @@ export interface AnalysisResult {
   cppMaxed: boolean;
   cpp2Maxed: boolean;
   cppSavings: number;
+  payrollMilestones: PayrollMilestone[];
 }
 
 interface FinancialState {
@@ -118,61 +127,87 @@ const defaultEconomicData: EconomicData = {
   lastUpdated: null,
 };
 
-const OAS_CLAWBACK_THRESHOLD = 95323;
-const OAS_FULL_CLAWBACK = 148179;
-
-const CPP_YMPE = 74600;
-const CPP_RATE = 0.0595;
-const CPP2_YAMPE = 85000;
-const CPP2_RATE = 0.04;
-
 function calculateOASClawback(income: number): { clawback: number; effectiveRate: number } {
-  if (income <= OAS_CLAWBACK_THRESHOLD) {
+  const { OAS } = TAX_CONSTANTS_2026;
+  if (income <= OAS.CLAWBACK_START) {
     return { clawback: 0, effectiveRate: 0 };
   }
-  const excessIncome = Math.min(income - OAS_CLAWBACK_THRESHOLD, OAS_FULL_CLAWBACK - OAS_CLAWBACK_THRESHOLD);
-  const clawback = excessIncome * 0.15;
-  const effectiveRate = (clawback / (income - OAS_CLAWBACK_THRESHOLD)) * 100;
+  const excessIncome = Math.min(income - OAS.CLAWBACK_START, OAS.FULL_CLAWBACK - OAS.CLAWBACK_START);
+  const clawback = excessIncome * OAS.RATE;
+  const effectiveRate = (clawback / (income - OAS.CLAWBACK_START)) * 100;
   return { clawback, effectiveRate };
 }
 
 function calculateCPPContributions(grossIncome: number, province: Province): { cpp: number; cpp2: number; maxed: boolean; maxed2: boolean } {
+  const { CPP, CPP2 } = TAX_CONSTANTS_2026;
   const isQuebec = province === "QC";
   
-  const cppRate = isQuebec ? 0.064 : CPP_RATE;
-  const cppMaxable = Math.max(0, Math.min(grossIncome, CPP_YMPE) - 3500);
+  const cppRate = isQuebec ? 0.064 : CPP.RATE;
+  const cppMaxable = Math.max(0, Math.min(grossIncome, CPP.YMPE) - CPP.EXEMPT);
   const cpp = Math.round(cppMaxable * cppRate);
-  const cppMaxed = grossIncome >= CPP_YMPE;
+  const cppMaxed = grossIncome >= CPP.YMPE;
 
   let cpp2 = 0;
   let cpp2Maxed = false;
-  if (grossIncome > CPP_YMPE) {
-    const cpp2Maxable = Math.min(grossIncome, CPP2_YAMPE) - CPP_YMPE;
-    cpp2 = Math.round(cpp2Maxable * CPP2_RATE);
-    cpp2Maxed = grossIncome >= CPP2_YAMPE;
+  if (grossIncome > CPP.YMPE) {
+    const cpp2Maxable = Math.min(grossIncome, CPP2.YAMPE) - CPP.YMPE;
+    cpp2 = Math.round(cpp2Maxable * CPP2.RATE);
+    cpp2Maxed = grossIncome >= CPP2.YAMPE;
   }
 
   return { cpp, cpp2, maxed: cppMaxed, maxed2: cpp2Maxed };
 }
 
-function calculateCarbonRebate(province: Province, income: number, children: number, isRural: boolean): number {
-  const baseAmounts: Record<string, { base: number; spouse: number; child: number }> = {
-    ON: { base: 488, spouse: 244, child: 122 },
-    AB: { base: 0, spouse: 0, child: 0 },
-    BC: { base: 193, spouse: 96, child: 48 },
-    MB: { base: 450, spouse: 225, child: 112 },
-    SK: { base: 340, spouse: 170, child: 85 },
-    NS: { base: 328, spouse: 164, child: 82 },
-    NB: { base: 412, spouse: 206, child: 103 },
-    PE: { base: 440, spouse: 220, child: 110 },
-    NL: { base: 476, spouse: 238, child: 119 },
-    YT: { base: 0, spouse: 0, child: 0 },
-    NT: { base: 0, spouse: 0, child: 0 },
-    NU: { base: 0, spouse: 0, child: 0 },
-    QC: { base: 0, spouse: 0, child: 0 },
-  };
+function calculatePayrollMilestones(grossIncome: number, province: Province): PayrollMilestone[] {
+  const { CPP, CPP2, EI } = TAX_CONSTANTS_2026;
+  const isQuebec = province === "QC";
+  
+  const monthlyGross = grossIncome / 12;
+  const cppRate = isQuebec ? 0.064 : CPP.RATE;
+  
+  const milestones: PayrollMilestone[] = [];
+  
+  let cppAccumulated = 0;
+  let cpp2Accumulated = 0;
+  let eiAccumulated = 0;
+  const cppExemptMonthly = CPP.EXEMPT / 12;
+  
+  for (let month = 1; month <= 12; month++) {
+    const pensionable = Math.max(0, monthlyGross - cppExemptMonthly);
+    const monthlyCpp = Math.min(pensionable * cppRate, CPP.YMPE / 12);
+    const monthlyCpp2 = grossIncome > CPP.YMPE 
+      ? Math.min(Math.max(0, monthlyGross) * CPP2.RATE, (CPP2.YAMPE - CPP.YMPE) / 12)
+      : 0;
+    const monthlyEi = isQuebec ? 0 : Math.min(monthlyGross * EI.RATE, EI.MAX_INSURABLE / 12);
+    
+    const prevCpp = cppAccumulated;
+    const prevCpp2 = cpp2Accumulated;
+    const prevEi = eiAccumulated;
+    
+    cppAccumulated += monthlyCpp;
+    cpp2Accumulated += monthlyCpp2;
+    eiAccumulated += monthlyEi;
+    
+    if (cppAccumulated >= CPP.YMPE && prevCpp < CPP.YMPE) {
+      milestones.push({ month, type: "cpp", extraMonthly: monthlyCpp });
+    }
+    
+    if (cpp2Accumulated >= CPP2.YAMPE && prevCpp2 < CPP2.YAMPE) {
+      milestones.push({ month, type: "cpp2", extraMonthly: monthlyCpp2 });
+    }
+    
+    if (!isQuebec && eiAccumulated >= EI.MAX_INSURABLE && prevEi < EI.MAX_INSURABLE) {
+      milestones.push({ month, type: "ei", extraMonthly: monthlyEi });
+    }
+  }
+  
+  return milestones;
+}
 
-  const amounts = baseAmounts[province] || baseAmounts.ON;
+function calculateCarbonRebate(province: Province, income: number, children: number, isRural: boolean): number {
+  const { CARBON_REBATE } = TAX_CONSTANTS_2026;
+  const amounts = CARBON_REBATE[province] || CARBON_REBATE.ON;
+  
   let rebate = amounts.base;
   if (income < 65000) rebate = amounts.base * 1.2;
   else if (income > 80000) rebate = amounts.base * 0.8;
@@ -180,37 +215,47 @@ function calculateCarbonRebate(province: Province, income: number, children: num
   rebate += amounts.spouse;
   rebate += children * amounts.child;
   
-  if (isRural) {
-    rebate = rebate * 1.2;
-  }
+  if (isRural) rebate = rebate * 1.2;
   
   return Math.round(rebate);
 }
 
-function calculateCCB(netIncome: number, children: number, province: Province): number {
+function calculateCCB(netIncome: number, children: number): number {
+  const { CCB } = TAX_CONSTANTS_2026;
   if (children === 0) return 0;
   
-  const maxBenefitPerChild = [
-    { threshold: 0, amount: 7483 },
-    { threshold: 2, amount: 6720 },
-    { threshold: 4, amount: 5956 },
-    { threshold: 6, amount: 5193 },
-  ];
-
   let totalBenefit = 0;
   for (let i = 0; i < children; i++) {
-    const tier = maxBenefitPerChild[Math.min(i, 3)];
-    const reduction = netIncome > 35000 ? Math.min((netIncome - 35000) * 0.07, tier.amount * 0.95) : 0;
-    totalBenefit += Math.max(0, tier.amount - reduction);
+    const tier = CCB.CHILD_TIERS[Math.min(i, 3)];
+    const reduction = netIncome > CCB.BASE_INCOME_THRESHOLD 
+      ? Math.min((netIncome - CCB.BASE_INCOME_THRESHOLD) * tier.reductionRate, tier.maxBenefit * 0.95) 
+      : 0;
+    totalBenefit += Math.max(0, tier.maxBenefit - reduction);
   }
   
   return Math.round(totalBenefit);
 }
 
-function calculateCCBBoost(grossIncome: number, rrspContribution: number, children: number, province: Province): number {
-  const currentCCB = calculateCCB(grossIncome, children, province);
-  const reducedIncomeCCB = calculateCCB(Math.max(0, grossIncome - rrspContribution), children, province);
+function calculateCCBBoost(grossIncome: number, rrspContribution: number, children: number): number {
+  if (children === 0) return 0;
+  const currentCCB = calculateCCB(grossIncome, children);
+  const reducedIncomeCCB = calculateCCB(Math.max(0, grossIncome - rrspContribution), children);
   return Math.max(0, reducedIncomeCCB - currentCCB);
+}
+
+function calculateEffectiveMTR(grossIncome: number, children: number): number {
+  const marginalTaxRate = calculateMarginalTaxRate(grossIncome, "ON");
+  
+  let ccbDrag = 0;
+  if (children > 0) {
+    const income = grossIncome;
+    if (income > 38237 && income < 82847) {
+      const childIndex = Math.min(children - 1, 3);
+      ccbDrag = [0.07, 0.135, 0.19, 0.22][childIndex] || 0;
+    }
+  }
+  
+  return marginalTaxRate + ccbDrag;
 }
 
 export const useFinancialStore = create<FinancialState>()(
@@ -259,25 +304,32 @@ export const useFinancialStore = create<FinancialState>()(
       },
 
       calculatePriorities: () => {
-        const { profile, analysis } = get();
+        const { profile, analysis, economicData } = get();
         if (!profile) return;
 
         const priorities: PriorityItem[] = [];
         const warnings: WarningItem[] = [];
-        const marginalTaxRate = calculateMarginalTaxRate(
-          profile.grossIncome,
-          profile.province
-        );
-
+        
         const netIncome = Math.max(0, profile.grossIncome - (profile.rrspContributions || 0));
         const oasClawback = calculateOASClawback(netIncome);
         
-        if (netIncome > OAS_CLAWBACK_THRESHOLD - 15000) {
+        if (netIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START - 15000) {
           warnings.push({
             id: "oas-clawback",
-            type: netIncome > OAS_CLAWBACK_THRESHOLD ? "critical" : "warning",
+            type: netIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START ? "critical" : "warning",
             title: "OAS Clawback Warning",
-            description: `Net income of $${netIncome.toLocaleString()} triggers OAS recovery tax. RRSP contributions can help reduce this.`,
+            description: `Net income of $${netIncome.toLocaleString()} triggers OAS recovery tax. RRSP can help reduce this.`,
+          });
+        }
+
+        if (analysis?.payrollMilestones && analysis.payrollMilestones.length > 0) {
+          const nextMilestone = analysis.payrollMilestones[0];
+          const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+          warnings.push({
+            id: "payroll-milestone",
+            type: "info",
+            title: `Extra $${Math.round(nextMilestone.extraMonthly)}/month starting ${monthNames[nextMilestone.month - 1]}`,
+            description: `Your ${nextMilestone.type.toUpperCase()} will be maxed. Redirect this to your TFSA!`,
           });
         }
 
@@ -286,105 +338,77 @@ export const useFinancialStore = create<FinancialState>()(
             id: "employer-match",
             level: 1,
             title: "Employer Match",
-            description: "100% instant return on your contributions",
-            action: `Contribute enough to get full employer match ($${(profile.grossIncome * 0.05).toLocaleString()}/year)`,
+            description: "100% instant return - free money",
+            action: `Contribute to get full match ($${(profile.grossIncome * 0.05).toLocaleString()}/yr)`,
             completed: false,
             instantReturn: profile.grossIncome * 0.05,
           });
         }
 
-        const recommendedMonths = (get().economicData.inflationRate || 2) > 4 ? 6 : 3;
-        
-        priorities.push({
-          id: "safety-net",
-          level: profile.employerMatch === "full" ? 2 : 1,
-          title: "Build Your Safety Net",
-          description: `Emergency fund of ${recommendedMonths} months (${(get().economicData.inflationRate || 2) > 4 ? 'high inflation' : 'standard'} recommendation)`,
-          action:
-            profile.emergencyFundStatus === "full"
-              ? "Emergency fund is fully funded!"
-              : `Save $${Math.round(profile.monthlyExpenses * recommendedMonths).toLocaleString()} for ${recommendedMonths} months expenses`,
-          completed: profile.emergencyFundStatus === "full",
-        });
+        const isFirstTimeHomeBuyer = profile.homeOwnerStatus === "first-time-buyer" || profile.homeOwnerStatus === "renter";
+        if (profile.fhsaRoom > 0 && isFirstTimeHomeBuyer) {
+          priorities.push({
+            id: "fhsa",
+            level: 2,
+            title: "FHSA - Best of Both Worlds",
+            description: "Tax-deductible in, tax-free out for home purchase",
+            action: `Contribute to FHSA ($${profile.fhsaRoom.toLocaleString()} room)`,
+            completed: false,
+            instantReturn: calculateTaxSavings(1000, calculateMarginalTaxRate(profile.grossIncome, profile.province)),
+          });
+        }
 
-        if (profile.debtInterestRate > 7 && profile.totalHighInterestDebt > 0) {
+        if (profile.debtInterestRate > (HIGH_INTEREST_DEBT_THRESHOLD * 100) && profile.totalHighInterestDebt > 0) {
           priorities.push({
             id: "high-interest-debt",
-            level: profile.employerMatch === "full" || profile.emergencyFundStatus === "full" ? 3 : 2,
-            title: "Pay Off High-Interest Debt",
-            description: `Debt interest (${profile.debtInterestRate}%) exceeds typical investment returns`,
-            action: `Pay off $${Math.round(profile.totalHighInterestDebt).toLocaleString()} in high-interest debt`,
+            level: 3,
+            title: "High-Interest Debt Fire",
+            description: `Debt at ${profile.debtInterestRate}% beats most returns`,
+            action: `Pay off $${Math.round(profile.totalHighInterestDebt).toLocaleString()}`,
             completed: false,
           });
         }
 
-        const safetyNetComplete = profile.emergencyFundStatus === "full";
-        const debtHandled = profile.debtInterestRate <= 7 || profile.totalHighInterestDebt === 0;
+        const recommendedMonths = (economicData.inflationRate || 2) > 4 ? 6 : 3;
         
-        if (safetyNetComplete && debtHandled) {
-          const isFirstTimeHomeBuyer = profile.homeOwnerStatus === "first-time-buyer" || profile.homeOwnerStatus === "renter";
+        priorities.push({
+          id: "safety-net",
+          level: 4,
+          title: "Emergency Fund",
+          description: `${recommendedMonths} months ${(economicData.inflationRate || 2) > 4 ? "(high inflation)" : ""}`,
+          action: profile.emergencyFundStatus === "full"
+            ? "Fully funded!"
+            : `Save $${Math.round(profile.monthlyExpenses * recommendedMonths).toLocaleString()}`,
+          completed: profile.emergencyFundStatus === "full",
+        });
+
+        const effectiveMTR = analysis?.effectiveMTR || 0;
+        const needsRRSPForOAS = netIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START - 15000;
+        
+        if (effectiveMTR > 0.35 || needsRRSPForOAS || (profile.childrenCount > 0 && effectiveMTR > 0.25)) {
+          const taxSavings = calculateTaxSavings(1000, calculateMarginalTaxRate(profile.grossIncome, profile.province));
+          const ccbIncrease = profile.childrenCount > 0 ? calculateCCBBoost(profile.grossIncome, 1000, profile.childrenCount) : 0;
           
-          if (profile.fhsaRoom > 0 && isFirstTimeHomeBuyer) {
-            const taxSavings = calculateTaxSavings(1000, marginalTaxRate);
-            priorities.push({
-              id: "fhsa",
-              level: 4,
-              title: "FHSA - Best of Both Worlds",
-              description: "Tax-deductible contributions, tax-free withdrawals for home purchase",
-              action: `Contribute to FHSA ($${profile.fhsaRoom.toLocaleString()} room remaining)`,
-              completed: false,
-              instantReturn: taxSavings,
-            });
-          }
+          priorities.push({
+            id: "tax-alpha",
+            level: 5,
+            title: profile.childrenCount > 0 ? "RRSP + CCB Boost" : "RRSP Tax Alpha",
+            description: `Effective MTR: ${(effectiveMTR * 100).toFixed(1)}%${profile.childrenCount > 0 ? ` + CCB boost` : ""}`,
+            action: needsRRSPForOAS ? "RRSP to stay under OAS threshold" : "Contribute to RRSP",
+            completed: false,
+            instantReturn: taxSavings + ccbIncrease,
+          });
+        }
 
-          if (marginalTaxRate > 0.25 || profile.childrenCount > 0) {
-            const taxSavings = calculateTaxSavings(1000, marginalTaxRate);
-            const ccbIncrease = profile.childrenCount > 0 
-              ? calculateCCBBoost(profile.grossIncome, 1000, profile.childrenCount, profile.province)
-              : 0;
-            const totalBenefit = taxSavings + ccbIncrease;
-            
-            priorities.push({
-              id: "tax-alpha",
-              level: 4,
-              title: profile.childrenCount > 0 ? "Capture Tax Alpha + CCB Boost" : "Capture Tax Alpha",
-              description: `Marginal rate ${(marginalTaxRate * 100).toFixed(1)}%${profile.childrenCount > 0 ? ` + CCB boost ($${ccbIncrease * 12}/yr)` : ''}`,
-              action: "Contribute to RRSP to reduce income and increase CCB",
-              completed: false,
-              instantReturn: totalBenefit,
-            });
-          }
-
-          if (analysis?.cppMaxed || analysis?.cpp2Maxed) {
-            priorities.push({
-              id: "cpp-maxed",
-              level: 4,
-              title: "CPP Maxed - Redirect to TFSA",
-              description: analysis?.cpp2Maxed 
-                ? "CPP and CPP2 are now maxed for the year"
-                : "CPP is now maxed for the year",
-              action: analysis?.cpp2Maxed
-                ? `Redirect ~$${Math.round((CPP2_RATE * (CPP2_YAMPE - CPP_YMPE)) / 12)}/month to TFSA`
-                : `Redirect ~$${Math.round(((CPP_YMPE - 3500) * CPP_RATE) / 12)}/month to TFSA`,
-              completed: false,
-            });
-          }
-
-          if (profile.mortgageBalance > 0 && profile.mortgageRate > 0) {
-            const taxDragReturn = profile.mortgageRate / (1 - marginalTaxRate);
-            const shouldPayMortgage = profile.mortgageRate > analysis?.taxDragReturn! * 1.01;
-            
-            if (shouldPayMortgage) {
-              priorities.push({
-                id: "mortgage-accelerator",
-                level: 5,
-                title: "Mortgage Accelerator",
-                description: `Your ${profile.mortgageRate}% mortgage beats ${(analysis?.taxDragReturn || 0.045 * 100).toFixed(1)}% after-tax GIC return`,
-                action: `Consider lump sum to save ${(profile.mortgageRate * 10).toFixed(0)}/yr in interest`,
-                completed: false,
-              });
-            }
-          }
+        if (profile.tfsaRoom > 0) {
+          priorities.push({
+            id: "tfsa",
+            level: 6,
+            title: "TFSA - Wealth Builder",
+            description: "Tax-free growth for life",
+            action: `Contribute to TFSA ($${profile.tfsaRoom.toLocaleString()} room)`,
+            completed: false,
+          });
         }
 
         set({ priorities, warnings });
@@ -394,13 +418,13 @@ export const useFinancialStore = create<FinancialState>()(
         const { profile, economicData } = get();
         if (!profile) return;
 
-        const marginalTaxRate = calculateMarginalTaxRate(
-          profile.grossIncome,
-          profile.province
-        );
+        const { CPP, CPP2 } = TAX_CONSTANTS_2026;
+        const marginalTaxRate = calculateMarginalTaxRate(profile.grossIncome, profile.province);
+        const effectiveMTR = calculateEffectiveMTR(profile.grossIncome, profile.childrenCount);
         const retirementRate = profile.expectedRetirementTaxRate / 100 || 0.20;
         
         const cppContribs = calculateCPPContributions(profile.grossIncome, profile.province);
+        const payrollMilestones = calculatePayrollMilestones(profile.grossIncome, profile.province);
         
         let rrspVsTfsa: "rrsp" | "tfsa" | "both" | "fhsa" = "both";
         let rrspBenefit = 0;
@@ -408,14 +432,14 @@ export const useFinancialStore = create<FinancialState>()(
         let ccbBoost = 0;
         
         const ccbIncrease = profile.childrenCount > 0 
-          ? calculateCCBBoost(profile.grossIncome, 1000, profile.childrenCount, profile.province)
+          ? calculateCCBBoost(profile.grossIncome, 1000, profile.childrenCount)
           : 0;
         
-        if (marginalTaxRate > retirementRate + 0.05 || ccbBoost > 50) {
+        if (effectiveMTR > 0.40 || (profile.grossIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START - 15000)) {
           rrspVsTfsa = "rrsp";
-          rrspBenefit = (marginalTaxRate - retirementRate) * 100 + ccbIncrease * 12;
+          rrspBenefit = (effectiveMTR - retirementRate) * 100 + ccbIncrease * 12;
           ccbBoost = ccbIncrease * 12;
-        } else if (marginalTaxRate < retirementRate - 0.05) {
+        } else if (marginalTaxRate < retirementRate - 0.05 && effectiveMTR < 0.30) {
           rrspVsTfsa = "tfsa";
           tfsaBenefit = (retirementRate - marginalTaxRate) * 100;
         }
@@ -425,8 +449,8 @@ export const useFinancialStore = create<FinancialState>()(
           rrspVsTfsa = "fhsa";
         }
 
-        const mortgageRate = profile.mortgageRate || 5.5;
-        const conservativeReturn = 0.045;
+        const mortgageRate = profile.mortgageRate || DEFAULT_MORTGAGE_RATE;
+        const conservativeReturn = DEFAULT_CONSERVATIVE_RETURN;
         const taxDragReturn = mortgageRate / (1 - marginalTaxRate);
         
         let mortgageVsInvest: "mortgage" | "invest" | "either" = "either";
@@ -441,6 +465,7 @@ export const useFinancialStore = create<FinancialState>()(
           rrspVsTfsaRecommendation: rrspVsTfsa,
           rrspBenefit,
           tfsaBenefit,
+          effectiveMTR,
           ccbBoost,
           mortgageVsInvestRecommendation: mortgageVsInvest,
           mortgageSavings: mortgageRate * 1000,
@@ -449,6 +474,7 @@ export const useFinancialStore = create<FinancialState>()(
           cppMaxed: cppContribs.maxed,
           cpp2Maxed: cppContribs.maxed2,
           cppSavings: cppContribs.cpp + cppContribs.cpp2,
+          payrollMilestones,
         };
 
         set({ analysis });
@@ -468,6 +494,7 @@ export const useFinancialStore = create<FinancialState>()(
         });
         if (typeof window !== "undefined") {
           localStorage.removeItem("maple-compass-storage");
+          sessionStorage.clear();
         }
       },
 
