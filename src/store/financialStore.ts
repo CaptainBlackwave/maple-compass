@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { calculateMarginalTaxRate, calculateTaxSavings } from "@/data/taxBrackets";
 import { TAX_CONSTANTS_2026, HIGH_INTEREST_DEBT_THRESHOLD, DEFAULT_MORTGAGE_RATE, DEFAULT_CONSERVATIVE_RETURN } from "@/data/taxConstants";
+import { runFullOptimization, calculateSurvivalMode } from "@/utils/optimizationEngine";
 
 export type Province =
   | "AB"
@@ -44,6 +45,15 @@ export interface UserProfile {
   age: number;
   isRural: boolean;
   rrspContributions: number;
+  hasDTC: boolean;
+  income2024: number;
+  rdspContributions: number;
+  childAge: number;
+  respBalance: number;
+  annualRESPContribution: number;
+  donations: number;
+  hbpBalance: number;
+  movingToProvince?: Province;
 }
 
 export interface EconomicData {
@@ -91,6 +101,46 @@ export interface AnalysisResult {
   cpp2Maxed: boolean;
   cppSavings: number;
   payrollMilestones: PayrollMilestone[];
+  survivalMode: {
+    federalTaxFree: number;
+    provincialTaxFree: number;
+    totalTaxFree: number;
+  };
+  rdspOpportunity: {
+    eligible: boolean;
+    bondEligible: boolean;
+    grantEligible: boolean;
+    bondAmount: number;
+    grantAmount: number;
+    action: string;
+    instantReturn: number;
+  } | null;
+  respOpportunity: {
+    catchUpYears: number;
+    maxCatchUpContribution: number;
+    grantAmount: number;
+    action: string;
+  } | null;
+  gstOpportunity: {
+    currentCredit: number;
+    unlockedCredit: number;
+    thresholdGap: number;
+    action: string;
+  } | null;
+  donationOpportunity: {
+    currentCredit: number;
+    extraToThreshold: number;
+    additionalCredit: number;
+    action: string;
+  } | null;
+  provincialArbitrage: {
+    taxSavings: number;
+    action: string;
+  } | null;
+  hbpVsNewContribution: {
+    recommendation: "hpb" | "fhsa" | "either";
+    savings: number;
+  } | null;
 }
 
 interface FinancialState {
@@ -475,6 +525,42 @@ export const useFinancialStore = create<FinancialState>()(
           cpp2Maxed: cppContribs.maxed2,
           cppSavings: cppContribs.cpp + cppContribs.cpp2,
           payrollMilestones,
+          survivalMode: calculateSurvivalMode(profile.grossIncome, profile.province),
+          rdspOpportunity: profile.hasDTC ? {
+            eligible: true,
+            bondEligible: (profile.income2024 || profile.grossIncome) <= 38237,
+            grantEligible: (profile.income2024 || profile.grossIncome) <= 117045,
+            bondAmount: ((profile.income2024 || profile.grossIncome) <= 38237 && (profile.rdspContributions || 0) === 0) ? 1000 : 0,
+            grantAmount: ((profile.income2024 || profile.grossIncome) <= 117045 && (profile.rdspContributions || 0) >= 1500) ? 3500 : 0,
+            action: "Contribute $1,500 to RDSP",
+            instantReturn: 0,
+          } : null,
+          respOpportunity: (profile.childAge || 0) > 0 && (profile.childAge || 0) <= 17 ? {
+            catchUpYears: 1,
+            maxCatchUpContribution: 5000,
+            grantAmount: Math.min((profile.annualRESPContribution || 0) * 0.2, 500),
+            action: (profile.annualRESPContribution || 0) < 2500 ? `Add $${2500 - (profile.annualRESPContribution || 0)} for full grant` : "Getting max grant",
+          } : null,
+          gstOpportunity: {
+            currentCredit: 0,
+            unlockedCredit: 0,
+            thresholdGap: 0,
+            action: "Check GST credit eligibility",
+          },
+          donationOpportunity: (profile.donations || 0) > 0 ? {
+            currentCredit: (profile.donations || 0) * 0.29,
+            extraToThreshold: Math.max(0, 200 - (profile.donations || 0)),
+            additionalCredit: 0,
+            action: (profile.donations || 0) < 200 ? `Add $${200 - (profile.donations || 0)} for higher tier` : "Optimal tier",
+          } : null,
+          provincialArbitrage: profile.movingToProvince ? {
+            taxSavings: 0,
+            action: "Calculate provincial tax delta",
+          } : null,
+          hbpVsNewContribution: (profile.hbpBalance || 0) > 0 ? {
+            recommendation: "fhsa",
+            savings: 0,
+          } : null,
         };
 
         set({ analysis });

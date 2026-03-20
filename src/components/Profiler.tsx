@@ -83,6 +83,14 @@ export default function Profiler() {
       age: 30,
       isRural: false,
       rrspContributions: 0,
+      hasDTC: false,
+      income2024: 0,
+      rdspContributions: 0,
+      childAge: 0,
+      respBalance: 0,
+      annualRESPContribution: 0,
+      donations: 0,
+      hbpBalance: 0,
     }
   );
 
