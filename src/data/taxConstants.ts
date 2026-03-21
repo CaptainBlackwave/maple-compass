@@ -112,10 +112,23 @@ export const TAX_CONSTANTS_2026 = {
     THRESHOLD: 173205,
     RATE: 0.205,
   },
+  RRSP: {
+    MAX_CONTRIBUTION: 33810,
+    RATE: 0.18,
+  },
+  TFSA: {
+    MAX_CONTRIBUTION: 7000,
+  },
+  PAYMENT_DATES: {
+    CCB: [20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20],
+    GST_CREDIT: [5, 2, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    CARBON_REBATE: [15, 0, 15, 0, 15, 0, 15, 0, 15, 0, 15, 0],
+  },
 } as const;
 
 export const HIGH_INTEREST_DEBT_THRESHOLD = 0.07;
 export const DEFAULT_MORTGAGE_RATE = 0.055;
 export const DEFAULT_CONSERVATIVE_RETURN = 0.045;
+export const DEFAULT_GIC_RATE = 0.045;
 
 export type TaxConstants = typeof TAX_CONSTANTS_2026;

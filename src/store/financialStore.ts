@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { calculateMarginalTaxRate, calculateTaxSavings } from "@/data/taxBrackets";
-import { TAX_CONSTANTS_2026, HIGH_INTEREST_DEBT_THRESHOLD, DEFAULT_MORTGAGE_RATE, DEFAULT_CONSERVATIVE_RETURN } from "@/data/taxConstants";
+import { TAX_CONSTANTS_2026, HIGH_INTEREST_DEBT_THRESHOLD, DEFAULT_MORTGAGE_RATE, DEFAULT_CONSERVATIVE_RETURN, DEFAULT_GIC_RATE } from "@/data/taxConstants";
 import { runFullOptimization, calculateSurvivalMode } from "@/utils/optimizationEngine";
 
 export type Province =
@@ -99,7 +99,7 @@ export interface PayrollMilestone {
 }
 
 export interface AnalysisResult {
-  rrspVsTfsaRecommendation: "rrsp" | "tfsa" | "both" | "fhsa";
+  rrspVsTfsaRecommendation: "rrsp" | "tfsa" | "both" | "fhsa" | "rrsp-maxed";
   rrspBenefit: number;
   tfsaBenefit: number;
   effectiveMTR: number;
@@ -373,13 +373,21 @@ export const useFinancialStore = create<FinancialState>()(
         
         const netIncome = Math.max(0, profile.grossIncome - (profile.rrspContributions || 0));
         const oasClawback = calculateOASClawback(netIncome);
+        const oasFullyRecovered = netIncome > TAX_CONSTANTS_2026.OAS.FULL_CLAWBACK;
         
-        if (netIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START - 15000) {
+        if (oasFullyRecovered) {
+          warnings.push({
+            id: "oas-recovered",
+            type: "info",
+            title: "OAS Fully Recovered",
+            description: "At this income level, OAS is $0. RRSP won't help recover it (would need ~$600k+ in contributions). Focus on TFSA instead.",
+          });
+        } else if (netIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START - 15000) {
           warnings.push({
             id: "oas-clawback",
-            type: netIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START ? "critical" : "warning",
-            title: "OAS Clawback Warning",
-            description: `Net income of $${netIncome.toLocaleString()} triggers OAS recovery tax. RRSP can help reduce this.`,
+            type: netIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START ? "warning" : "info",
+            title: "OAS Clawback in Progress",
+            description: `Net income of $${netIncome.toLocaleString()} reduces OAS. RRSP can help reduce this.`,
           });
         }
 
@@ -407,6 +415,9 @@ export const useFinancialStore = create<FinancialState>()(
         }
 
         const isFirstTimeHomeBuyer = profile.homeOwnerStatus === "first-time-buyer" || profile.homeOwnerStatus === "renter";
+        const rrspMax = TAX_CONSTANTS_2026.RRSP.MAX_CONTRIBUTION;
+        const rrspLimitReached = (profile.rrspContributions || 0) >= rrspMax;
+        
         if (profile.fhsaRoom > 0 && isFirstTimeHomeBuyer) {
           priorities.push({
             id: "fhsa",
@@ -419,22 +430,28 @@ export const useFinancialStore = create<FinancialState>()(
           });
         }
 
+        const debtLevel = profile.totalHighInterestDebt > 0 ? profile.totalHighInterestDebt : 0;
+        const annualExpenses = (profile.monthlyExpenses || 0) * 12;
+        const isHighIncomeDebtor = profile.grossIncome > 100000 && debtLevel > annualExpenses * 0.5;
+        const debtFireLevel: 2 | 3 = isHighIncomeDebtor ? 2 : 3;
+
         if (profile.debtInterestRate > (HIGH_INTEREST_DEBT_THRESHOLD * 100) && profile.totalHighInterestDebt > 0) {
           priorities.push({
             id: "high-interest-debt",
-            level: 3,
+            level: debtFireLevel,
             title: "High-Interest Debt Fire",
-            description: `Debt at ${profile.debtInterestRate}% beats most returns`,
+            description: `Debt at ${profile.debtInterestRate}% - guaranteed ${profile.debtInterestRate}% return beats any investment`,
             action: `Pay off $${Math.round(profile.totalHighInterestDebt).toLocaleString()}`,
             completed: false,
           });
         }
 
         const recommendedMonths = (economicData.inflationRate || 2) > 4 ? 6 : 3;
+        const emergencyFundLevel = isHighIncomeDebtor ? 4 : 3;
         
         priorities.push({
           id: "safety-net",
-          level: 4,
+          level: emergencyFundLevel,
           title: "Emergency Fund",
           description: `${recommendedMonths} months ${(economicData.inflationRate || 2) > 4 ? "(high inflation)" : ""}`,
           action: profile.emergencyFundStatus === "full"
@@ -487,38 +504,52 @@ export const useFinancialStore = create<FinancialState>()(
         const cppContribs = calculateCPPContributions(profile.grossIncome, profile.province);
         const payrollMilestones = calculatePayrollMilestones(profile.grossIncome, profile.province);
         
-        let rrspVsTfsa: "rrsp" | "tfsa" | "both" | "fhsa" = "both";
+        let rrspVsTfsa: "rrsp" | "tfsa" | "both" | "fhsa" | "rrsp-maxed" = "both";
         let rrspBenefit = 0;
         let tfsaBenefit = 0;
         let ccbBoost = 0;
+        
+        const rrspMax = TAX_CONSTANTS_2026.RRSP.MAX_CONTRIBUTION;
+        const rrspLimitReached = (profile.rrspContributions || 0) >= rrspMax;
         
         const ccbIncrease = profile.childrenCount > 0 
           ? calculateCCBBoost(profile.grossIncome, 1000, profile.childrenCount)
           : 0;
         
-        if (effectiveMTR > 0.40 || (profile.grossIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START - 15000)) {
-          rrspVsTfsa = "rrsp";
-          rrspBenefit = (effectiveMTR - retirementRate) * 100 + ccbIncrease * 12;
-          ccbBoost = ccbIncrease * 12;
+        const isFirstTimeHomeBuyer = profile.homeOwnerStatus === "first-time-buyer" || profile.homeOwnerStatus === "renter";
+        
+        if (rrspLimitReached && profile.tfsaRoom > 0) {
+          rrspVsTfsa = "tfsa";
+          tfsaBenefit = (retirementRate - marginalTaxRate) * 100;
+        } else if (effectiveMTR > 0.40 || (profile.grossIncome > TAX_CONSTANTS_2026.OAS.CLAWBACK_START - 15000)) {
+          if (rrspLimitReached) {
+            rrspVsTfsa = "rrsp-maxed";
+            rrspBenefit = 0;
+          } else {
+            rrspVsTfsa = "rrsp";
+            rrspBenefit = (effectiveMTR - retirementRate) * 100 + ccbIncrease * 12;
+            ccbBoost = ccbIncrease * 12;
+          }
         } else if (marginalTaxRate < retirementRate - 0.05 && effectiveMTR < 0.30) {
           rrspVsTfsa = "tfsa";
           tfsaBenefit = (retirementRate - marginalTaxRate) * 100;
         }
 
-        const isFirstTimeHomeBuyer = profile.homeOwnerStatus === "first-time-buyer" || profile.homeOwnerStatus === "renter";
-        if (profile.fhsaRoom > 0 && isFirstTimeHomeBuyer) {
+        if (profile.fhsaRoom > 0 && isFirstTimeHomeBuyer && !rrspLimitReached) {
           rrspVsTfsa = "fhsa";
         }
 
         const mortgageRate = profile.mortgageRate || DEFAULT_MORTGAGE_RATE;
-        const conservativeReturn = DEFAULT_CONSERVATIVE_RETURN;
-        const taxDragReturn = mortgageRate / (1 - marginalTaxRate);
+        const gicRate = DEFAULT_GIC_RATE;
+        
+        const breakevenReturn = gicRate / (1 - marginalTaxRate);
+        const afterTaxGICReturn = gicRate * (1 - marginalTaxRate);
         
         let mortgageVsInvest: "mortgage" | "invest" | "either" = "either";
         
-        if (mortgageRate > taxDragReturn + 0.005) {
+        if (mortgageRate > breakevenReturn + 0.005) {
           mortgageVsInvest = "mortgage";
-        } else if (mortgageRate < taxDragReturn - 0.005) {
+        } else if (mortgageRate < afterTaxGICReturn - 0.005) {
           mortgageVsInvest = "invest";
         }
 
@@ -530,8 +561,8 @@ export const useFinancialStore = create<FinancialState>()(
           ccbBoost,
           mortgageVsInvestRecommendation: mortgageVsInvest,
           mortgageSavings: mortgageRate * 1000,
-          investmentReturn: conservativeReturn * 1000,
-          taxDragReturn: taxDragReturn * 100,
+          investmentReturn: afterTaxGICReturn * 1000,
+          taxDragReturn: breakevenReturn * 100,
           cppMaxed: cppContribs.maxed,
           cpp2Maxed: cppContribs.maxed2,
           cppSavings: cppContribs.cpp + cppContribs.cpp2,

@@ -2,6 +2,7 @@ import EconomicPulse from "@/components/EconomicPulse";
 import Profiler from "@/components/Profiler";
 import MapleStack from "@/components/MapleStack";
 import CompassGapVisualizer from "@/components/CompassGapVisualizer";
+import PaymentCalendar from "@/components/PaymentCalendar";
 
 export default function Home() {
   return (
@@ -25,6 +26,8 @@ export default function Home() {
           </div>
 
           <CompassGapVisualizer />
+
+          <PaymentCalendar />
 
           <footer className="mt-12 pt-6 border-t border-neutral-800">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-neutral-500">
