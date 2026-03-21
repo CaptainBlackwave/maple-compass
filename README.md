@@ -27,7 +27,7 @@ Input your financial details—all stored locally in your browser:
 - Gross Income, Province, Age
 - Total High-Interest Debt & Interest Rate
 - Emergency Fund Status
-- FHSA/TFSA/RRSP contribution room
+- FHSA/TFSA/RRSP contribution room & annual contributions
 - Home Ownership Status & Mortgage Details
 - Employer Match Status
 - Number of Children (for CCB calculation)
@@ -37,15 +37,16 @@ Input your financial details—all stored locally in your browser:
 - Capital Gains
 - Estate Assets (Primary/Secondary property, RRIF)
 - Self-Employment & Corporate Income
+- Moving Province (for tax arbitrage)
 
 ### The Maple Stack
-A 6-level priority queue for your next $100:
+A 6-level priority queue for your next $100 (dynamically reordered based on your situation):
 
 | Level | Priority | Description |
 |-------|----------|-------------|
 | 1 | Employer Match | 100% instant ROI (free money) |
 | 2 | FHSA | Best of both worlds (first-time buyers) |
-| 3 | High-Interest Debt | Debt interest > 7% |
+| 3 | High-Interest Debt Fire | Debt > 7% - moves up for high earners |
 | 4 | Emergency Fund | 3-6 months (scaled by inflation) |
 | 5 | RRSP/Tax Alpha | CCB boost + OAS protection |
 | 6 | TFSA | Wealth builder |
@@ -55,26 +56,35 @@ A 6-level priority queue for your next $100:
 ## Advanced Tax Optimization
 
 ### RRSP vs TFSA Decision Engine
-Compares your **Effective Marginal Tax Rate** (MTR) vs. expected retirement tax rate. Includes CCB phase-out "hidden tax":
-- 1 child: +7.0% hidden tax
-- 2 children: +13.5% hidden tax
-- 3+ children: +19.0% hidden tax
+Compares your **Effective Marginal Tax Rate** (MTR) vs. expected retirement tax rate. Includes:
+- CCB phase-out "hidden tax" (7-19% for children)
+- RRSP annual limit detection ($33,810 max)
+- Automatic pivot to TFSA when RRSP is maxed
 
-### OAS Clawback Protection
+### OAS Clawback Protection (Fixed Logic)
 - **2026 Threshold**: $95,323 (Line 23400 Net Income)
-- Warns when RRSP contributions can reduce OAS recovery tax
+- **Full Recovery**: $148,179 (receives $0 OAS)
+- Shows "OAS Fully Recovered" status instead of just warning
+- Notes that RRSP won't help recover at very high incomes (~would need $600k+)
+
+### Mortgage vs Market (with Tax Drag - Fixed)
+**Correct Formula**: `Breakeven Return = GIC Rate / (1 - Marginal Tax Rate)`
+
+At 54% MTR (high income in NS):
+- 5.5% mortgage ÷ (1 - 0.54) = **12% breakeven**
+- No GIC pays 12% → Recommendation: **Pay Mortgage**
 
 ### CPP/OAS Deferral Simulator
 Shows guaranteed "risk-free" returns:
 - CPP: +8.4% per year delayed (0.7%/month)
 - OAS: +7.2% per year delayed (+10% at age 75)
+- Alerts for optimal start ages
 
 ### Payroll Milestone Predictor
-Predicts when CPP/EI maxes out each year and shows "extra take-home pay" to redirect to TFSA.
-
-### Mortgage vs Market (with Tax Drag)
-Formula: `Required Return = Mortgage Rate / (1 - Marginal Tax Rate)`
-- 5% mortgage + 30% tax rate = 7.14% needed in taxable account to break even
+Predicts when CPP/EI maxes out each year:
+- Shows exact month when deductions cease
+- Calculates "extra take-home pay" to redirect to TFSA
+- Critical for high earners (often hits by Feb/Mar)
 
 ### Medical Expense Spousal-Switch
 Calculates min(3% income, $2,890) floor and suggests the lower-income spouse claim medical expenses.
@@ -91,19 +101,22 @@ Calculates min(3% income, $2,890) floor and suggests the lower-income spouse cla
 ### Canada Child Benefit (CCB)
 - Optimizes RRSP to reduce AFNI and increase CCB
 - Shows CCB boost as "instant return" on RRSP contributions
+- July payment increases when RRSP lowers income
 
 ### Carbon Rebate (CAIP)
-- Province-specific amounts
+- Province-specific base amounts
 - Rural supplement (+20%)
-- Income-adjusted amounts
+- Income-adjusted (higher for <$65k, lower for >$80k)
 
 ### GST/HST Credit
 - 25% boost in 2026
+- Quarterly payments (Jan, Apr, Jul, Oct)
 - Shows gap to threshold and potential unlock amount
 
 ### GST New Housing Rebate
 - Full 5% rebate on new builds up to $1M
 - Partial rebate up to $1.5M
+- First-time buyer priority
 
 ### RDSP (Disability Savings Plan)
 - $1,000 Bond (income < $38,237)
@@ -113,6 +126,7 @@ Calculates min(3% income, $2,890) floor and suggests the lower-income spouse cla
 ### RESP Catch-Up Logic
 - CESG: 20% match on first $2,500 ($500/year max)
 - Carry-forward: Can catch up 1 previous year
+- Shows optimal contribution to maximize grants
 
 ### MHRTC (Multigenerational Home Renovation)
 - 15% credit on up to $50,000 expenses
@@ -161,12 +175,26 @@ Solves Salary vs. Dividends dilemma:
 
 ---
 
-## The Compass Gap Visualizer
+## Visualizations
 
+### The Compass Gap Visualizer
 25-year wealth projection showing:
 - **Line A**: Standard path (5% return, after-tax contributions)
 - **Line B**: Compass path (6% + CCB optimization + mortgage savings)
 - **Gap**: "The Maple Compass Value Add"
+
+### 2026 Cash Flow Roadmap
+Interactive payment calendar showing:
+- CCB monthly (20th of each month)
+- GST/HST credit (quarterly)
+- Carbon rebate (quarterly)
+- Tax refund (April - based on RRSP contributions)
+- CPP/EI maxed alerts (extra monthly take-home)
+
+### RRSP Refund Simulator
+- Shows contribution → refund flow
+- Displays estimated refund with progress bar
+- Refund timing: ~April after filing
 
 ---
 
@@ -217,15 +245,22 @@ bun typecheck
 | Category | Value |
 |----------|-------|
 | OAS Clawback Start | $95,323 |
+| OAS Full Recovery | $148,179 |
 | CPP YMPE | $74,600 (5.95%) |
 | CPP2 YAMPE | $85,000 (4.0%) |
 | EI Max Insurable | $68,900 (1.63%) |
+| RRSP Max Contribution | $33,810 |
+| TFSA Limit | $7,000 |
 | BPA Federal | $16,452 |
+| BPA Reduction Start | $181,440 |
+| BPA Floor | $258,482 |
 | CCB Base Threshold | $38,237 |
 | Capital Gains Threshold | $250,000 |
 | AMT Threshold | $173,205 |
 | Medical Floor | min(3% income, $2,890) |
 | GST Housing Full | $1,000,000 |
+| GST Housing Partial | $1,500,000 |
+| MHRTC Max Credit | $7,500 |
 
 ---
 
